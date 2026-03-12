@@ -192,6 +192,11 @@ final class TimeTracker: ObservableObject {
         pauseTracking()
     }
 
+    /// Maximum duration (in seconds) for standalone tasks not belonging to a project.
+    /// When elapsed time reaches this threshold, the task auto-transitions to debrief.
+    /// Project tasks are exempt — the check uses `task.projectId`.
+    private static let standaloneTaskMaxDuration: TimeInterval = 30 * 60  // 30 minutes
+
     private func tick() {
         let appState = AppState.shared
         guard appState.isTimerRunning,
@@ -211,6 +216,12 @@ final class TimeTracker: ObservableObject {
             }
         }
         lastTickDate = now
+
+        // Auto-complete standalone tasks that reach the 30-minute limit.
+        // Project tasks (projectId != nil) are exempt from this cap.
+        if task.projectId == nil && appState.elapsedTime >= Self.standaloneTaskMaxDuration {
+            appState.completeTask()
+        }
     }
 
     private func finalizeCurrentAppUsage() {

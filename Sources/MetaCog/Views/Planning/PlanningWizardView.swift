@@ -224,6 +224,14 @@ struct PlanningWizardView: View {
         }
     }
 
+    /// Maximum duration (in seconds) for standalone tasks not belonging to a project.
+    /// Project tasks are exempt from this limit — the check is skipped when `projectId != nil`.
+    private static let standaloneTaskMaxDuration: TimeInterval = 30 * 60  // 30 minutes
+
+    /// Whether this task is standalone (not part of a project) and subject to the 30-minute cap.
+    /// When the Projects feature is implemented, this will check `projectId == nil`.
+    private var isStandaloneTask: Bool { true }
+
     private var step6EstimateDuration: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("How long do you think this task will take?")
@@ -236,21 +244,49 @@ struct PlanningWizardView: View {
                     .font(.caption)
             }
 
+            // Warn if sub-goal estimates exceed the standalone task limit.
+            if isStandaloneTask && subGoalTotal > 30 {
+                Label(
+                    "Standalone tasks are limited to 30 minutes. This task will end at the 30-minute mark. Create a project for longer work.",
+                    systemImage: "exclamationmark.triangle.fill"
+                )
+                .foregroundStyle(.orange)
+                .font(.caption)
+            }
+
             HStack {
                 TextField("Minutes", value: Binding(
                     get: { estimatedDuration / 60 },
-                    set: { estimatedDuration = $0 * 60 }
+                    set: { newMinutes in
+                        // Clamp standalone tasks to the 30-minute maximum.
+                        if isStandaloneTask {
+                            estimatedDuration = min(newMinutes, 30) * 60
+                        } else {
+                            estimatedDuration = newMinutes * 60
+                        }
+                    }
                 ), format: .number)
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 100)
                 Text("minutes")
                     .foregroundStyle(.secondary)
+
+                if isStandaloneTask {
+                    Text("(max 30)")
+                        .foregroundStyle(.tertiary)
+                        .font(.caption)
+                }
             }
         }
         .onAppear {
             let subGoalTotal = subGoals.reduce(0.0) { $0 + $1.estimatedMinutes } * 60
             if estimatedDuration == 0 && subGoalTotal > 0 {
-                estimatedDuration = subGoalTotal
+                // Clamp auto-filled duration for standalone tasks.
+                if isStandaloneTask {
+                    estimatedDuration = min(subGoalTotal, Self.standaloneTaskMaxDuration)
+                } else {
+                    estimatedDuration = subGoalTotal
+                }
             }
         }
     }

@@ -55,12 +55,29 @@ struct TaskLedgerRow: View {
         (try? DatabaseManager.shared.fetchDebrief(forTask: task.id))?.overallOutcome
     }
 
+    /// The project name for tasks belonging to a project, or nil for standalone tasks.
+    private var projectName: String? {
+        guard let projectId = task.projectId else { return nil }
+        return (try? DatabaseManager.shared.fetchProject(id: projectId))?.name
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
                 Text(task.title)
                     .font(.subheadline.weight(.medium))
                     .lineLimit(1)
+
+                // Project tag badge — shown for tasks belonging to a project.
+                if let name = projectName {
+                    Text(name)
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(.blue)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 1)
+                        .background(Capsule().fill(.blue.opacity(0.12)))
+                }
+
                 Spacer()
                 if let outcome = debriefOutcome {
                     Text(outcome.rawValue.capitalized)

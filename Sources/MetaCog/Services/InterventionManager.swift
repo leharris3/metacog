@@ -99,6 +99,8 @@ final class InterventionManager: ObservableObject {
         }
     }
 
+    /// Handles the user's self-graded Anki answer. The intervention completes regardless
+    /// of whether the answer was correct — only one prompt is required.
     func handleAnkiAnswer(correct: Bool) {
         guard var card = currentAnkiCard else { return }
         let appState = AppState.shared
@@ -119,15 +121,8 @@ final class InterventionManager: ObservableObject {
         card.review(quality: correct ? 4 : 1)
         try? DatabaseManager.shared.updateAnkiCard(card)
 
-        if correct {
-            completeIntervention(wasOverridden: false)
-        } else {
-            // Show another card
-            let dueCards = (try? DatabaseManager.shared.fetchDueAnkiCards()) ?? []
-            let allCards = (try? DatabaseManager.shared.fetchAllAnkiCards()) ?? []
-            let candidates = dueCards.isEmpty ? allCards : dueCards
-            currentAnkiCard = candidates.filter({ $0.id != card.id }).randomElement() ?? candidates.first
-        }
+        // Complete after a single prompt, regardless of correctness.
+        completeIntervention(wasOverridden: false)
     }
 
     func useOverride() {

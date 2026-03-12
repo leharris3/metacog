@@ -24,6 +24,19 @@ final class DatabaseManager: Sendable {
         var migrator = DatabaseMigrator()
 
         migrator.registerMigration("v1") { db in
+            try db.create(table: "project") { t in
+                t.primaryKey("id", .text).notNull()
+                t.column("name", .text).notNull()
+                t.column("startDate", .datetime).notNull()
+                t.column("endDate", .datetime).notNull()
+                t.column("status", .text).notNull().defaults(to: "planning")
+                t.column("createdAt", .datetime).notNull()
+                t.column("completedAt", .datetime)
+                // Metacognition responses collected during project setup wizard.
+                t.column("importanceResponse", .text).notNull().defaults(to: "")
+                t.column("challengesResponse", .text).notNull().defaults(to: "")
+            }
+
             try db.create(table: "task") { t in
                 t.primaryKey("id", .text).notNull()
                 t.column("title", .text).notNull()
@@ -33,6 +46,11 @@ final class DatabaseManager: Sendable {
                 t.column("status", .text).notNull().defaults(to: "planning")
                 t.column("createdAt", .datetime).notNull()
                 t.column("completedAt", .datetime)
+                // Nullable FK to project — nil means standalone task.
+                t.column("projectId", .text)
+                    .references("project", onDelete: .cascade)
+                // Execution order within project (0-indexed). Null for standalone tasks.
+                t.column("projectOrder", .integer)
             }
 
             try db.create(table: "appPermission") { t in
@@ -95,6 +113,16 @@ final class DatabaseManager: Sendable {
                 t.column("overallOutcome", .text).notNull()
                 t.column("subGoalReflectionsJSON", .text).notNull()
                 t.column("lessonsLearned", .text).notNull()
+            }
+
+            try db.create(table: "projectDebrief") { t in
+                t.primaryKey("id", .text).notNull()
+                t.column("projectId", .text).notNull()
+                    .references("project", onDelete: .cascade)
+                t.column("overallOutcome", .text).notNull()
+                t.column("reflectionResponse", .text).notNull()
+                t.column("goalsReflectionResponse", .text).notNull()
+                t.column("incompleteTaskReflectionsJSON", .text).notNull().defaults(to: "[]")
             }
 
             try db.create(table: "dailyOverride") { t in
@@ -221,7 +249,120 @@ final class DatabaseManager: Sendable {
             }
         }
 
+        // Migration for existing databases: adds project tables and task-project columns.
+        // The v1 migration was updated to include these for fresh installs, but databases
+        // created before the Projects feature need this migration to add the new schema.
+        migrator.registerMigration("addProjects") { db in
+            // Create project table if it doesn't already exist (fresh installs have it from v1).
+            if try !db.tableExists("project") {
+                try db.create(table: "project") { t in
+                    t.primaryKey("id", .text).notNull()
+                    t.column("name", .text).notNull()
+                    t.column("startDate", .datetime).notNull()
+                    t.column("endDate", .datetime).notNull()
+                    t.column("status", .text).notNull().defaults(to: "planning")
+                    t.column("createdAt", .datetime).notNull()
+                    t.column("completedAt", .datetime)
+                    t.column("importanceResponse", .text).notNull().defaults(to: "")
+                    t.column("challengesResponse", .text).notNull().defaults(to: "")
+                }
+            }
+
+            // Create projectDebrief table if it doesn't already exist.
+            if try !db.tableExists("projectDebrief") {
+                try db.create(table: "projectDebrief") { t in
+                    t.primaryKey("id", .text).notNull()
+                    t.column("projectId", .text).notNull()
+                        .references("project", onDelete: .cascade)
+                    t.column("overallOutcome", .text).notNull()
+                    t.column("reflectionResponse", .text).notNull()
+                    t.column("goalsReflectionResponse", .text).notNull()
+                    t.column("incompleteTaskReflectionsJSON", .text).notNull().defaults(to: "[]")
+                }
+            }
+
+            // Add projectId and projectOrder columns to existing task table.
+            let taskColumns = try db.columns(in: "task").map(\.name)
+            if !taskColumns.contains("projectId") {
+                try db.alter(table: "task") { t in
+                    t.add(column: "projectId", .text).references("project", onDelete: .cascade)
+                }
+            }
+            if !taskColumns.contains("projectOrder") {
+                try db.alter(table: "task") { t in
+                    t.add(column: "projectOrder", .integer)
+                }
+            }
+        }
+
         return migrator
+    }
+
+    // MARK: - Project CRUD
+
+    func createProject(_ project: ProjectRecord) throws {
+        try dbQueue.write { db in
+            try project.insert(db)
+        }
+    }
+
+    func fetchProject(id: UUID) throws -> ProjectRecord? {
+        try dbQueue.read { db in
+            try ProjectRecord.fetchOne(db, key: id)
+        }
+    }
+
+    func fetchAllProjects() throws -> [ProjectRecord] {
+        try dbQueue.read { db in
+            try ProjectRecord.order(Column("createdAt").desc).fetchAll(db)
+        }
+    }
+
+    func fetchActiveProject() throws -> ProjectRecord? {
+        try dbQueue.read { db in
+            try ProjectRecord
+                .filter(Column("status") == ProjectStatus.active.rawValue
+                    || Column("status") == ProjectStatus.paused.rawValue)
+                .fetchOne(db)
+        }
+    }
+
+    func updateProject(_ project: ProjectRecord) throws {
+        try dbQueue.write { db in
+            try project.update(db)
+        }
+    }
+
+    func deleteProject(id: UUID) throws {
+        try dbQueue.write { db in
+            _ = try ProjectRecord.deleteOne(db, key: id)
+        }
+    }
+
+    // MARK: - ProjectDebrief CRUD
+
+    func createProjectDebrief(_ debrief: ProjectDebrief) throws {
+        try dbQueue.write { db in
+            try debrief.insert(db)
+        }
+    }
+
+    func fetchProjectDebrief(forProject projectId: UUID) throws -> ProjectDebrief? {
+        try dbQueue.read { db in
+            try ProjectDebrief.filter(Column("projectId") == projectId).fetchOne(db)
+        }
+    }
+
+    // MARK: - Project-Task Queries
+
+    /// Fetches all tasks belonging to a project, ordered by `projectOrder`.
+    func fetchProjectTasks(forProject projectId: UUID) throws -> [TaskRecord] {
+        try dbQueue.read { db in
+            try TaskRecord
+                .filter(Column("projectId") == projectId)
+                .order(Column("projectOrder"))
+                .fetchAll(db)
+        }
     }
 
     // MARK: - Task CRUD

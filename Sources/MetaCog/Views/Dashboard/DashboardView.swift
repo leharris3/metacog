@@ -2,6 +2,7 @@ import SwiftUI
 
 enum DashboardPage: Int, CaseIterable {
     case analytics
+    case projects
     case ledger
     case anki
     case database
@@ -9,6 +10,7 @@ enum DashboardPage: Int, CaseIterable {
     var icon: String {
         switch self {
         case .analytics: "chart.bar.fill"
+        case .projects: "folder.fill"
         case .ledger: "list.bullet.rectangle.fill"
         case .anki: "rectangle.on.rectangle.fill"
         case .database: "tablecells"
@@ -18,6 +20,7 @@ enum DashboardPage: Int, CaseIterable {
     var label: String {
         switch self {
         case .analytics: "Analytics"
+        case .projects: "Projects"
         case .ledger: "Tasks"
         case .anki: "Cards"
         case .database: "Database"
@@ -66,6 +69,8 @@ struct DashboardView: View {
         switch selectedPage {
         case .analytics:
             AnalyticsPageView()
+        case .projects:
+            ProjectsPageView()
         case .ledger:
             TaskLedgerPageView()
         case .anki:

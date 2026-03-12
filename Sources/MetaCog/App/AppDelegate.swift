@@ -5,12 +5,16 @@ import Combine
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hudPanel: HUDPanel?
+    private var menuBarManager: MenuBarManager?
     private let appState = AppState.shared
     private var cancellables = Set<AnyCancellable>()
 
     private var planningWindow: NSWindow?
+    private var projectWizardWindow: NSWindow?
     private var debriefWindow: NSWindow?
     private var resumeWindow: NSWindow?
+    private var ankiGateWindow: NSWindow?
+    private var projectDebriefWindow: NSWindow?
 
     func applicationWillFinishLaunching(_ notification: Notification) {
         // Prevent macOS window restoration from reopening Settings/Dashboard
@@ -29,8 +33,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Check for interrupted task
         checkForInterruptedTask()
 
-        // Create HUD
+        // Create HUD and menu bar icon
         setupHUD()
+        setupMenuBar()
 
         // Set up observers for planning-related windows (dropFirst skips initial value)
         setupWindowObservers()
@@ -106,6 +111,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 MainActor.assumeIsolated {
                     if showing { self?.showResumeWindow() }
                     else { self?.closeResumeWindow() }
+                }
+            }
+            .store(in: &cancellables)
+
+        appState.$showingAnkiGate
+            .dropFirst()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] showing in
+                MainActor.assumeIsolated {
+                    if showing { self?.showAnkiGateWindow() }
+                    else { self?.closeAnkiGateWindow() }
+                }
+            }
+            .store(in: &cancellables)
+
+        appState.$showingProjectWizard
+            .dropFirst()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] showing in
+                MainActor.assumeIsolated {
+                    if showing { self?.showProjectWizardWindow() }
+                    else { self?.closeProjectWizardWindow() }
+                }
+            }
+            .store(in: &cancellables)
+
+        appState.$showingProjectDebrief
+            .dropFirst()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] showing in
+                MainActor.assumeIsolated {
+                    if showing { self?.showProjectDebriefWindow() }
+                    else { self?.closeProjectDebriefWindow() }
                 }
             }
             .store(in: &cancellables)
@@ -217,6 +255,63 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         resumeWindow = nil
     }
 
+    // MARK: - Anki Gate Window
+
+    private func showAnkiGateWindow() {
+        guard ankiGateWindow == nil else {
+            forceKeyWindow(ankiGateWindow!)
+            return
+        }
+        let window = makeTransientWindow(size: NSSize(width: 480, height: 440))
+        let view = AnkiGateView().environmentObject(appState)
+        window.contentView = NSHostingView(rootView: view)
+        ankiGateWindow = window
+        forceKeyWindow(window)
+    }
+
+    private func closeAnkiGateWindow() {
+        ankiGateWindow?.close()
+        ankiGateWindow = nil
+    }
+
+    // MARK: - Project Wizard Window
+
+    private func showProjectWizardWindow() {
+        guard projectWizardWindow == nil else {
+            forceKeyWindow(projectWizardWindow!)
+            return
+        }
+        let window = makeTransientWindow(size: NSSize(width: 560, height: 600))
+        let view = ProjectWizardView().environmentObject(appState)
+        window.contentView = NSHostingView(rootView: view)
+        projectWizardWindow = window
+        forceKeyWindow(window)
+    }
+
+    private func closeProjectWizardWindow() {
+        projectWizardWindow?.close()
+        projectWizardWindow = nil
+    }
+
+    // MARK: - Project Debrief Window
+
+    private func showProjectDebriefWindow() {
+        guard projectDebriefWindow == nil else {
+            forceKeyWindow(projectDebriefWindow!)
+            return
+        }
+        let window = makeTransientWindow(size: NSSize(width: 520, height: 560))
+        let view = ProjectDebriefView().environmentObject(appState)
+        window.contentView = NSHostingView(rootView: view)
+        projectDebriefWindow = window
+        forceKeyWindow(window)
+    }
+
+    private func closeProjectDebriefWindow() {
+        projectDebriefWindow?.close()
+        projectDebriefWindow = nil
+    }
+
     // MARK: - Setup
 
     private func checkAccessibilityPermissions() {
@@ -229,6 +324,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func checkForInterruptedTask() {
+        // Restore any active/paused project.
+        if let project = try? DatabaseManager.shared.fetchActiveProject() {
+            appState.currentProject = project
+        }
+
         guard let task = try? DatabaseManager.shared.fetchPausedTask() else { return }
         appState.currentTask = task
         appState.loadTaskData()
@@ -238,5 +338,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func setupHUD() {
         hudPanel = HUDPanel(appState: appState)
         hudPanel?.orderFront(nil)
+    }
+
+    /// Creates the menu bar status item (white cog icon) with HUD toggle and quick actions.
+    /// Must be called after `setupHUD()` so the HUD panel reference is available.
+    ///
+    /// Note: `openDashboard` and `openSettings` callbacks are wired later by `HUDContentView`
+    /// via `configureMenuBarCallbacks()`, because those actions require SwiftUI's `openWindow`
+    /// and `openSettings` environments which are only available inside SwiftUI views.
+    private func setupMenuBar() {
+        guard let hud = hudPanel else { return }
+        menuBarManager = MenuBarManager(hudPanel: hud, appState: appState)
+
+        // Settings can be opened via NSApp.sendAction from AppKit directly.
+        menuBarManager?.openSettings = {
+            NSApp.activate()
+            NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+        }
+    }
+
+    /// Called by `HUDContentView.onAppear` to wire SwiftUI environment actions
+    /// (openWindow, openSettings) into the menu bar manager.
+    func configureMenuBarCallbacks(openDashboard: @escaping () -> Void) {
+        menuBarManager?.openDashboard = openDashboard
     }
 }
